@@ -14,7 +14,6 @@ class TimeFrame:
 
         self.start = start
         self.end = end
-        self.duration = duration
         self.available = available
         self.next = None
         self.prev = None
@@ -36,6 +35,10 @@ class TimeFrame:
 
     def timeInside(self, time: float) -> bool:
         return self.start <= time < self.end
+
+    @property
+    def duration(self) -> float:
+        return self.end - self.start
 
     def findStart(self):
         cur_frame = self
@@ -241,16 +244,20 @@ class MultiContainer:
     def searchOpening(self, start, duration):
         proposed = TimeFrame(start, start + duration)
         original_proposal = TimeFrame(start, start + duration)
-        while True:
+        modified_proposal = True
+
+        while modified_proposal:
+            modified_proposal = False
             for cont in self._containers:
                 alloc_strat = cont.getAllocationStrategy()
-                ret_proposal = alloc_strat(
+                modified_proposal = alloc_strat(
+                    cont,
                     proposed,
                     original_proposal,
                 )
-                if ret_proposal is not proposed:
-                    proposed = modified_proposal
+                if modified_proposal:
                     break
+        return proposed
 
 def obstructed(container, start, duration):
     frame = container.findFrame(start)
@@ -271,48 +278,57 @@ def findAvailable(
     ):
     frame = container.findFrame(proposal.start)
     if frame.available:
-        return False, proposal
+        return False
     frame = frame.getNext()
-    start = frame.start
-    end = start + original_proposal.duration
+    proposal.start = frame.start
+    proposal.end = frame.start + original_proposal.duration
     return True
 
 def findAvailableWithExtension(
     container,
-    start,
-    duration,
+    proposal,
+    original_proposal,
     ):
-    frame = container.findFrame(start)
+    frame = container.findFrame(proposal.start)
+    end_frame = container.findFrame(proposal.end)
+    if frame.available and end_frame.available:
+        return False
+
     if not frame.available:
         frame = frame.getNext()
-        start = frame.start
-        end = start + duration
-    else:
-        end = start + duration
-        duration += start - frame.start
+        proposal.start = frame.start
 
-    while frame.duration < duration:
-        duration -= frame.duration
+    remaining_duration = original_proposal.duration
+
+    while remaining_duration > frame.duration:
+        remaining_duration -= frame.duration
         frame = frame.next.next
-        end = frame.start + duration
 
-    return TimeFrame(start, end)
+    end = frame.start + remaining_duration
+    remaining_duration = 0
+
+    proposal.end = end
+    return True
 
 def findClear(
     container,
-    start,
-    duration,
+    proposal,
+    original_proposal,
     ):
-    frame = container.findFrame(start)
+    frame = container.findFrame(proposal.start)
+    if frame.available and proposal.duration <= frame.end - proposal.start:
+        return False
+
+    frame = frame.next
     if not frame.available:
         frame = frame.next
-        start = frame.start
-    while frame.end - start < duration:
-        frame = frame.next.next
-        start = frame.start
 
-    end = start + duration
-    return TimeFrame(start, end)
+    while original_proposal.duration > frame.duration:
+        frame = frame.next.next
+
+    proposal.start = frame.start
+    proposal.end = frame.start + original_proposal.duration
+    return True
 
 def findSpecific(open_close_schedule, operation_schedule, use_schedule, start, duration):
     proposed = TimeFrame(start, start + duration)
@@ -331,9 +347,9 @@ UNTIL = (DAYS) * 24
 OPEN = 8
 CLOSE = 20
 CLOSE_OP = 24
-open_closed_schedule = FrameContainer()
-OP_schedule = FrameContainer()
-use_schedule = FrameContainer()
+open_closed_schedule = FrameContainer(findAvailable)
+OP_schedule = FrameContainer(findAvailableWithExtension)
+use_schedule = FrameContainer(findClear)
 tmp_schedule = FrameContainer()
 for day in range(DAYS):
     open_closed_schedule.occupyTime(day * 24, day * 24 + OPEN)
@@ -343,8 +359,11 @@ for day in range(DAYS):
 
 multi_cont = MultiContainer([open_closed_schedule, OP_schedule, use_schedule])
 actual = multi_cont.searchOpening(8, 14)
-print(actual.duration, actual.start, actual.end)
 use_schedule.occupyTime(actual.start, actual.end)
+actual = multi_cont.searchOpening(34, 3)
+use_schedule.occupyTime(actual.start, actual.end)
+actual = multi_cont.searchOpening(9, 3)
+tmp_schedule.occupyTime(actual.start, actual.end)
 
 open_closed_schedule.showFrameHistory(0, UNTIL)
 OP_schedule.showFrameHistory(0, UNTIL)
